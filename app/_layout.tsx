@@ -134,6 +134,8 @@
 
 import React, {useEffect, useState} from 'react';
 import {Alert, Button, FlatList, Modal, StyleSheet, Text, TextInput, TouchableOpacity, View} from 'react-native';
+import { Client } from '@stomp/stompjs';
+import SockJS from 'sockjs-client';
 
 // ChatMessageResponse.ts
 export interface ChatMessageResponse {
@@ -156,10 +158,15 @@ const App = () => {
     const [userId, setUserId] = useState(''); // Store logged-in user ID
     const [token, setToken] = useState(''); // Store user's token for authorization
     const [chats, setChats] = useState<ChatroomResponse[]>([]); // Store the chat list
+
     const [createModalVisible, setCreateModalVisible] = useState(false); // Modal visibility for creating a new chat
-    const [deleteModalVisible, setDeleteModalVisible] = useState(false); // Modal visibility for creating a new chat
+    const [deleteModalVisible, setDeleteModalVisible] = useState(false); // Modal visibility for deleting a chat
+
     const [newChatUserId, setNewChatUserId] = useState(''); // Store user ID input for creating a new chat
     const [deleteChatroomId, setDeleteChatroomId] = useState<string>('')
+
+    const [stompClient, setStompClient] = useState<Client | null>(null);
+    const [isConnected, setIsConnected] = useState(false);
 
     // Fetch all chats for the logged-in user
     const fetchChats = async () => {
@@ -178,6 +185,46 @@ const App = () => {
             Alert.alert('Error', 'Unable to fetch chats. Please try again.');
         }
     };
+
+    const connectToWebSocket = () => {
+        if (stompClient) {
+            stompClient.deactivate(); // Clean up the old client if already connected
+        }
+
+        const client = new Client({
+            webSocketFactory: () => new SockJS('http://localhost:8080/ws'),
+            connectHeaders: {
+                Authorization: `Bearer ${token}`, // Pass the JWT token
+            },
+            debug: (str) => console.log(str), // Debug logs for STOMP connection
+            onConnect: () => {
+                console.log('Connected to WebSocket');
+                setIsConnected(true);
+
+                // Subscribe to all chat topics
+                chats.forEach((chat) => {
+                    client.subscribe(`/user/chatroom/${chat.chatroomId}`, (message) => {
+                        console.log(`Message received for chatroom ${chat.chatroomId}:`, message.body);
+                        // setMessages((prevMessages) => ({
+                        //     ...prevMessages,
+                        //     [chat.chatroomId]: [...(prevMessages[chat.chatroomId] || []), message.body],
+                        // }));
+                    });
+                });
+            },
+            onDisconnect: () => {
+                console.log('Disconnected from WebSocket');
+                setIsConnected(false);
+            },
+            onStompError: (frame) => {
+                console.error('STOMP error:', frame);
+            },
+        });
+
+        client.activate();
+        setStompClient(client);
+    };
+
 
     // Create a new chat
     const createChat = async () => {
@@ -237,6 +284,22 @@ const App = () => {
             fetchChats();
         }
     }, [userId, token]);
+
+    // Connect to WebSocket whenever the chat list changes
+    useEffect(() => {
+        if (chats.length > 0) {
+            connectToWebSocket();
+        }
+    }, [chats]);
+
+    // Clean up WebSocket connection on component unmount
+    useEffect(() => {
+        return () => {
+            if (stompClient) {
+                stompClient.deactivate();
+            }
+        };
+    }, [stompClient]);
 
     return (
         <View style={styles.container}>
