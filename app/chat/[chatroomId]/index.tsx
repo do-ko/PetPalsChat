@@ -1,7 +1,8 @@
 import React, {useEffect, useState} from 'react';
-import {Button, FlatList, StyleSheet, Text, TextInput, View} from 'react-native';
+import {Button, FlatList, Image, StyleSheet, Text, TextInput, View} from 'react-native';
 import {useLocalSearchParams} from 'expo-router';
-import {ChatMessageResponse} from "@/app";
+import {ChatMessageResponse, useWebSocket} from "@/context/WebSocketContext";
+// import {ChatMessageResponse} from "@/app";
 
 const API_BASE_URL = 'http://localhost:8080/api'; // Replace with your backend's base URL
 
@@ -19,14 +20,13 @@ export interface PageData {
 
 const ChatPage: React.FC = () => {
     const {chatroomId, userId, token} = useLocalSearchParams<{ chatroomId: string; userId: string; token: string }>();
-    const [messages, setMessages] = useState<ChatMessageResponse[]>([]); // Store messages
     const [inputMessage, setInputMessage] = useState<string>(''); // Message input
     const [page, setPage] = useState(0);
     const [hasMore, setHasMore] = useState(true);
     const [isLoading, setIsLoading] = useState(false);
+    const {stompClient, chatMessages, setChatMessages} = useWebSocket();
 
-    // Fetch messages on component load
-    const fetchMessages = async () => {
+    const fetchMessages = async (reset = false) => {
         console.log("FETCHING MESSAGES")
         if (!hasMore) return;
         setIsLoading(true);
@@ -39,11 +39,16 @@ const ChatPage: React.FC = () => {
             }
             const data: ChatMessagePage = await response.json();
             if (data.content.length > 0) {
-                setMessages((prevMessages) => [...prevMessages, ...data.content]); // Append older messages
+                const updatedMessages = {...chatMessages};
+                updatedMessages[chatroomId] = reset
+                    ? data.content
+                    : [...(chatMessages[chatroomId] || []), ...data.content];
+
+                setChatMessages(updatedMessages)
+
             } else {
                 setHasMore(false); // No more messages
             }
-            // setMessages(data);
         } catch (error) {
             console.error('Error fetching messages:', error);
         } finally {
@@ -51,13 +56,41 @@ const ChatPage: React.FC = () => {
         }
     };
 
+    const sendMessage = () => {
+        if (stompClient) {
+            const messagePayload = {
+                chatroomId,
+                senderId: userId,
+                content: inputMessage,
+            };
+
+            stompClient.publish({
+                destination: '/app/chat', // Maps to the `@MessageMapping("/chat")` endpoint
+                body: JSON.stringify(messagePayload),
+            });
+
+            setInputMessage('');
+        } else {
+            console.log('WebSocket not connected');
+        }
+    };
+
     // Fetch messages when the component loads
     useEffect(() => {
         console.log("CHECKING CHATID and TOKEN: " + chatroomId + token)
-        if (chatroomId && token) {
+        if (!chatroomId || !token) return;
+
+        if (page === 0) {
+            // Initial load: Reset messages and fetch fresh data
+            console.log("RESETTING MESSAGES FOR NEW CHATROOM");
+            fetchMessages(true);
+        } else {
+            // Paginated fetch: Append messages
+            console.log("FETCHING ADDITIONAL MESSAGES FOR CHATROOM");
             fetchMessages();
         }
     }, [chatroomId, token, page]);
+
 
     const handleLoadMore = () => {
         if (!isLoading && hasMore) {
@@ -65,24 +98,23 @@ const ChatPage: React.FC = () => {
         }
     };
 
-    // Placeholder images for now (if avatars are needed later)
-    const getPlaceholderImage = (id: string) => `https://via.placeholder.com/40?text=${id.charAt(0).toUpperCase()}`;
-
     return (
         <View style={styles.container}>
             <FlatList
-                data={messages}
+                data={chatMessages[chatroomId]}
                 keyExtractor={(item, index) => index.toString()}
-                renderItem={({item}) => (
-                    <View
-                        style={[styles.messageContainer, item.senderId === userId ? styles.myMessage : styles.otherMessage]}>
-                        <View style={styles.bubble}>
-                            <Text style={styles.sender}>{item.senderId}</Text>
-                            <Text style={styles.content}>{item.content}</Text>
-                            <Text style={styles.timestamp}>{new Date(item.sendAt).toLocaleTimeString()}</Text>
+                renderItem={({item}) =>
+                    (
+                        <View
+                            style={[styles.messageContainer, item.senderId === userId ? styles.myMessage : styles.otherMessage]}>
+                            <View style={styles.bubble}>
+                                <Text style={styles.sender}>{item.senderId}</Text>
+                                <Text style={styles.content}>{item.content}</Text>
+                                <Text style={styles.timestamp}>{new Date(item.sendAt).toLocaleTimeString()}</Text>
+                            </View>
                         </View>
-                    </View>
-                )}
+                    )
+                }
                 inverted // Show the latest messages at the bottom
                 onEndReached={handleLoadMore}
                 onEndReachedThreshold={0.1}
@@ -97,7 +129,7 @@ const ChatPage: React.FC = () => {
                     value={inputMessage}
                     onChangeText={setInputMessage}
                 />
-                <Button title="Send" onPress={() => console.log('Send message functionality pending')}/>
+                <Button title="Send" onPress={sendMessage}/>
             </View>
         </View>
     );

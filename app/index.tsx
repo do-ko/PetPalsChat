@@ -134,23 +134,10 @@
 
 import React, {useEffect, useState} from 'react';
 import {Alert, Button, FlatList, Modal, StyleSheet, Text, TextInput, TouchableOpacity, View} from 'react-native';
-import {Client} from '@stomp/stompjs';
-import SockJS from 'sockjs-client';
 import {RelativePathString, router} from 'expo-router';
+import {ChatMessageResponse, ChatroomResponse, LatestMessageResponse, useWebSocket} from "@/context/WebSocketContext";
 
-// ChatMessageResponse.ts
-export interface ChatMessageResponse {
-    content: string;
-    sendAt: string;
-    senderId: string;
-}
 
-// ChatroomResponse.ts
-export interface ChatroomResponse {
-    chatroomId: string;
-    participants: string[]; // List of user IDs
-    lastMessage?: ChatMessageResponse; // Optional, as a chatroom may not have messages
-}
 
 // Backend API Base URL
 const API_BASE_URL = 'http://localhost:8080/api';
@@ -158,7 +145,6 @@ const API_BASE_URL = 'http://localhost:8080/api';
 const App = () => {
     const [userId, setUserId] = useState(''); // Store logged-in user ID
     const [token, setToken] = useState(''); // Store user's token for authorization
-    const [chats, setChats] = useState<ChatroomResponse[]>([]); // Store the chat list
 
     const [createModalVisible, setCreateModalVisible] = useState(false); // Modal visibility for creating a new chat
     const [deleteModalVisible, setDeleteModalVisible] = useState(false); // Modal visibility for deleting a chat
@@ -166,8 +152,8 @@ const App = () => {
     const [newChatUserId, setNewChatUserId] = useState(''); // Store user ID input for creating a new chat
     const [deleteChatroomId, setDeleteChatroomId] = useState<string>('')
 
-    const [stompClient, setStompClient] = useState<Client | null>(null);
     const [isConnected, setIsConnected] = useState(false);
+    const { chats, setChats, stompClient, connectWebSocket, latestMessages, setLatestMessages } = useWebSocket();
 
     // Fetch all chats for the logged-in user
     const fetchChats = async () => {
@@ -176,57 +162,36 @@ const App = () => {
             return;
         }
         try {
-            const response = await fetch(`${API_BASE_URL}/chatroom`, {
+            const chatResponse = await fetch(`${API_BASE_URL}/chatroom`, {
                 headers: {Authorization: `Bearer ${token}`},
             });
-            console.log(response)
-            const data = await response.json();
-            setChats(data);
+            console.log(chatResponse)
+            const chatData: ChatroomResponse[] = await chatResponse.json();
+            setChats(chatData);
+
+            let lastMessagePath = ""
+            chatData.forEach((chat : ChatroomResponse) => {
+                if (lastMessagePath == ""){
+                    lastMessagePath += `?chatroomIds=${chat.chatroomId}`
+                } else {
+                    lastMessagePath += `&chatroomIds=${chat.chatroomId}`
+                }
+            })
+            const latestMessageResponse = await fetch(`${API_BASE_URL}/chatroom/messages/latest${lastMessagePath}`, {
+                headers: {Authorization: `Bearer ${token}`},
+            });
+            console.log(latestMessageResponse)
+            const latestMessageData: LatestMessageResponse[] = await latestMessageResponse.json();
+            const latestMessagesMap: Record<string, ChatMessageResponse | null> = {};
+            latestMessageData.forEach((item) => {
+                latestMessagesMap[item.chatroomId] = item.latestMessage || null;
+            });
+            setLatestMessages(latestMessagesMap)
         } catch (error) {
             console.error('Error fetching chats:', error);
             Alert.alert('Error', 'Unable to fetch chats. Please try again.');
         }
     };
-
-    const connectToWebSocket = () => {
-        if (stompClient) {
-            stompClient.deactivate(); // Clean up the old client if already connected
-        }
-
-        const client = new Client({
-            webSocketFactory: () => new SockJS('http://localhost:8080/ws'),
-            connectHeaders: {
-                Authorization: `Bearer ${token}`, // Pass the JWT token
-            },
-            debug: (str) => console.log(str), // Debug logs for STOMP connection
-            onConnect: () => {
-                console.log('Connected to WebSocket');
-                setIsConnected(true);
-
-                // Subscribe to all chat topics
-                chats.forEach((chat) => {
-                    client.subscribe(`/user/chatroom/${chat.chatroomId}`, (message) => {
-                        console.log(`Message received for chatroom ${chat.chatroomId}:`, message.body);
-                        // setMessages((prevMessages) => ({
-                        //     ...prevMessages,
-                        //     [chat.chatroomId]: [...(prevMessages[chat.chatroomId] || []), message.body],
-                        // }));
-                    });
-                });
-            },
-            onDisconnect: () => {
-                console.log('Disconnected from WebSocket');
-                setIsConnected(false);
-            },
-            onStompError: (frame) => {
-                console.error('STOMP error:', frame);
-            },
-        });
-
-        client.activate();
-        setStompClient(client);
-    };
-
 
     // Create a new chat
     const createChat = async () => {
@@ -290,7 +255,7 @@ const App = () => {
     // Connect to WebSocket whenever the chat list changes
     useEffect(() => {
         if (chats.length > 0) {
-            connectToWebSocket();
+            connectWebSocket(token);
         }
     }, [chats]);
 
@@ -339,17 +304,13 @@ const App = () => {
                                         chatroomId: item.chatroomId, // Dynamically injected parameter
                                         userId, // Pass the logged-in user's ID
                                         token,  // Pass the token
-                                    },
+                                    }
                                 })
                             }
                         >
                             <Text style={styles.chatTitle}>Chat ID: {item.chatroomId}</Text>
                             <Text>Participants: {item.participants.join(', ')}</Text>
-                            {item.lastMessage ? (
-                                <Text>Last Message: {item.lastMessage.content}</Text>
-                            ) : (
-                                <Text>No messages yet</Text>
-                            )}
+                            <Text>{latestMessages[item.chatroomId]?.content || 'No messages yet'}</Text>
                         </TouchableOpacity>
 
                         {/* Delete button */}
