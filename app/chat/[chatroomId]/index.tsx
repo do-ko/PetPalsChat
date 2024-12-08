@@ -2,9 +2,8 @@ import React, {useEffect, useState} from 'react';
 import {Button, FlatList, Image, StyleSheet, Text, TextInput, View} from 'react-native';
 import {useLocalSearchParams} from 'expo-router';
 import {ChatMessageResponse, useWebSocket} from "@/context/WebSocketContext";
-// import {ChatMessageResponse} from "@/app";
 
-const API_BASE_URL = 'http://localhost:8080/api'; // Replace with your backend's base URL
+const API_BASE_URL = 'http://192.168.1.4:8080/api'; // Replace with your backend's base URL
 
 export interface ChatMessagePage {
     content: ChatMessageResponse[];
